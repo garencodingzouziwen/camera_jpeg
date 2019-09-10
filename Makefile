@@ -1,6 +1,7 @@
-# CROSS_COMPILE = mips-openwrt-linux-musl-
-# CC = $(CROSS_COMPILE)gcc
+#CROSS_COMPILE = mips-openwrt-linux-musl-
+#CROSS_COMPILE = /home/garen/share/github_project/openwrt-toolchain-ramips-mt7620_gcc-7.4.0_musl.Linux-x86_64/toolchain-mipsel_24kc_gcc-7.4.0_musl/bin/mipsel-openwrt-linux-musl-
 CC = gcc
+#CC = $(CROSS_COMPILE)gcc
 TARGET = camera_picture
 DEPS = $(shell find ./ -name "*.h")
 SRC  = $(shell find ./ -name "*.c")

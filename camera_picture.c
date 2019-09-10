@@ -3,7 +3,7 @@
  * 文件描述：获取摄像头支持的格式，并拍照保存
  * 编写人：ZiWenZou
  * 编写日期：2019-09-03
- * 修改日期：2019-09-03
+ * 修改日期：2019-09-10
 *****************************************************/
 #include <stdio.h>
 #include <unistd.h>
@@ -17,13 +17,16 @@
 #include <sys/mman.h>
 #include <time.h>
 #include <sys/time.h>
+#include <errno.h>
 // 操作摄像头设备
 #include <linux/videodev2.h>
 
 #define CAMERA_DEVICE "/dev/video0"
-#define MMAP_BUFFER_NUM  1
-
+// #define MMAP_BUFFER_NUM  1
 #define JPG "./out/%s.jpg"
+#define JPG_WIDTH  1280
+#define JPG_HEIGHT 720
+#define IOCTL_RETRY 4
 
 typedef struct
 {
@@ -32,14 +35,14 @@ typedef struct
 } BUFTYPE;
 
 BUFTYPE *usr_buf;
-
-/*
+static unsigned int n_buffer = 0;
+/*s
 **初始化摄像头，open设备，设置非阻塞
 */
 int Camera_Init(char *directory)
 {
     struct v4l2_input inp;
-    int fd = open(directory, O_RDWR | O_NONBLOCK);
+    int fd = open(directory, O_RDWR); //O_NONBLOCK
     if (fd < 0)
     {
         perror("open directory error!");
@@ -83,7 +86,7 @@ int Camera_PintfInfo(int fd)
     for(i=0;;i++)
     {
         fmt.index = i;
-        if ( -1 == ioctl(fd, VIDIOC_ENUM_FMT, &fmt))
+        if (-1 == ioctl(fd, VIDIOC_ENUM_FMT, &fmt))
         {
             break;
         }
@@ -111,11 +114,10 @@ int Camera_PintfInfo(int fd)
 */
 static int Camera_Config_mmap(int fd)
 {
-    unsigned int n_buffer = 0;
     /*to request frame cache, contain requested counts*/
     struct v4l2_requestbuffers reqbufs;
     memset(&reqbufs, 0, sizeof(reqbufs));
-    reqbufs.count = MMAP_BUFFER_NUM; /*the number of buffer*/ //缓冲区个数
+    reqbufs.count = 1; /*the number of buffer*/ //缓冲区个数
     reqbufs.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     reqbufs.memory = V4L2_MEMORY_MMAP;
     if (-1 == ioctl(fd, VIDIOC_REQBUFS, &reqbufs)) //申请缓冲区
@@ -166,21 +168,22 @@ int Camera_Config(int fd)
     struct v4l2_format tv_fmt;  /* frame format */
     /*set the form of camera capture data*/
     tv_fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE; /*v4l2_buf_typea,camera must use V4L2_BUF_TYPE_VIDEO_CAPTURE*/
-    tv_fmt.fmt.pix.width = 1280;
-    tv_fmt.fmt.pix.height = 720;
+    tv_fmt.fmt.pix.width = JPG_WIDTH;
+    tv_fmt.fmt.pix.height = JPG_HEIGHT;
     tv_fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_MJPEG; /*V4L2_PIX_FMT_YYUV*/ //V4L2_PIX_FMT_YUYV //V4L2_PIX_FMT_MJPEG
-    tv_fmt.fmt.pix.field = V4L2_FIELD_NONE;                                /*V4L2_FIELD_NONE*/
-    if (ioctl(fd, VIDIOC_S_FMT, &tv_fmt) < 0)                              //设置设备工作格式
+    tv_fmt.fmt.pix.field = V4L2_FIELD_ANY;                                 /*V4L2_FIELD_NONE*/
+    if (ioctl(fd, VIDIOC_S_FMT, &tv_fmt) < 0)                             //设置设备工作格式
     {
         perror("ioctl VIDIOC_S_FMT error!\n");
         return -1;
     }
-    printf("user config camera pixelformat = %s,width = %d,height = %d\n", "MJPEG", 1280, 720);
+    printf("user config camera pixelformat = %s,width = %d,height = %d\n", "JPEG", JPG_WIDTH, JPG_HEIGHT);
     if(Camera_Config_mmap(fd) < 0) //内存映射
     {
         perror("Camera_Config_mmap() error!\n");
         return -2;
     }
+    printf("camera config ok!\n");
     return 0;
 }
 
@@ -191,8 +194,15 @@ int Camera_StartCapture(int fd)
 {
     unsigned int i;
     enum v4l2_buf_type type;
+    //disable
+    type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    if (-1 == ioctl(fd, VIDIOC_STREAMOFF, &type))
+    {
+        perror("Fail to ioctl 'VIDIOC_STREAMOFF'");
+        return -1;
+    }
     /*place the kernel cache to a queue*/
-    for (i = 0; i < MMAP_BUFFER_NUM; i++)
+    for (i = 0; i < n_buffer; i++)
     {
         struct v4l2_buffer buf;
         memset(&buf, 0, sizeof(buf));
@@ -205,6 +215,7 @@ int Camera_StartCapture(int fd)
             return -1;
         }
     }
+    //enable
     type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (-1 == ioctl(fd, VIDIOC_STREAMON, &type)) //启动采集数据
     {
@@ -238,8 +249,23 @@ static int process_image(void *addr, int length)
         return -1;
     }
     fwrite(addr, length, 1, fp);
-    usleep(500);
+    usleep(100);
     fclose(fp);
+    //上传该照片到服务器
+    printf("uploading this image to server....\n");
+    char popen_str[200] = {0};
+    sprintf(popen_str, "~/share/github_project/file_transfer/file_transfer_client/file_client upload %s 129.211.58.232 50002", image_name);
+    printf("image_name = %s\n", image_name);
+    FILE *fp_popen = popen(popen_str, "r");
+    if (fp_popen == NULL)
+    {
+        printf("upload error!\n");
+    }
+    else
+    {
+        printf("upload ok!\n");
+        pclose(fp_popen);
+    }
     return 0;
 }
 
@@ -254,7 +280,7 @@ static int Camera_ReadCapture_picture(int fd)
         perror("Fail to ioctl 'VIDIOC_DQBUF'");
         return -1;
     }
-    assert(buf.index < MMAP_BUFFER_NUM);
+    assert(buf.index < n_buffer);
     //read process space's data to a file
     process_image(usr_buf[buf.index].start, usr_buf[buf.index].length);
     if (-1 == ioctl(fd, VIDIOC_QBUF, &buf))
@@ -307,7 +333,7 @@ int Camera_StopCapture(int fd)
         perror("Fail to ioctl 'VIDIOC_STREAMOFF'");
         return -1;
     }
-    for (i = 0; i < MMAP_BUFFER_NUM; i++)
+    for (i = 0; i < n_buffer; i++)
     {
         if (-1 == munmap(usr_buf[i].start, usr_buf[i].length))
         {
